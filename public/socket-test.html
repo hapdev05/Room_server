@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Test - Room Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        input, select {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            padding: 2px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .user-item {
+            padding: 10px;
+            background: #e9ecef;
+            margin: 5px 0;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .online-indicator {
+            width: 10px;
+            height: 10px;
+            background: #28a745;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Socket.IO Test - Room Server</h1>
+    
+    <div class="container">
+        <!-- Connection Panel -->
+        <div class="panel">
+            <h2>🔌 Connection</h2>
+            <div id="connectionStatus" class="status disconnected">
+                ❌ Disconnected
+            </div>
+            
+            <div>
+                <h3>User Info</h3>
+                <input type="text" id="userId" placeholder="User ID" value="test_user_001">
+                <input type="text" id="userName" placeholder="User Name" value="Test User">
+                <input type="email" id="userEmail" placeholder="Email" value="test@example.com">
+                <input type="url" id="userPicture" placeholder="Picture URL" value="">
+            </div>
+            
+            <div>
+                <button id="connectBtn">Connect</button>
+                <button id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+        </div>
+
+        <!-- Actions Panel -->
+        <div class="panel">
+            <h2>⚡ Actions</h2>
+            
+            <h3>User Actions</h3>
+            <button id="updateUserBtn" disabled>Update User Info</button>
+            <button id="activityBtn" disabled>Send Activity</button>
+            <button id="getOnlineBtn" disabled>Get Online Users</button>
+            
+            <h3>Typing Indicators</h3>
+            <button id="startTypingBtn" disabled>Start Typing</button>
+            <button id="stopTypingBtn" disabled>Stop Typing</button>
+            
+            <h3>Notifications</h3>
+            <input type="text" id="notificationMsg" placeholder="Notification message">
+            <button id="sendNotificationBtn" disabled>Send to All</button>
+        </div>
+
+        <!-- Online Users Panel -->
+        <div class="panel">
+            <h2>👥 Online Users (<span id="onlineCount">0</span>)</h2>
+            <div id="onlineUsersList">
+                <p>No users online</p>
+            </div>
+        </div>
+
+        <!-- Event Log Panel -->
+        <div class="panel">
+            <h2>📋 Event Log</h2>
+            <button id="clearLogBtn">Clear Log</button>
+            <div id="eventLog" class="log">
+                <div class="log-entry">Ready to connect...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let isConnected = false;
+
+        // DOM elements
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const eventLog = document.getElementById('eventLog');
+        const onlineUsersList = document.getElementById('onlineUsersList');
+        const onlineCount = document.getElementById('onlineCount');
+
+        // User info inputs
+        const userIdInput = document.getElementById('userId');
+        const userNameInput = document.getElementById('userName');
+        const userEmailInput = document.getElementById('userEmail');
+        const userPictureInput = document.getElementById('userPicture');
+
+        // Action buttons
+        const updateUserBtn = document.getElementById('updateUserBtn');
+        const activityBtn = document.getElementById('activityBtn');
+        const getOnlineBtn = document.getElementById('getOnlineBtn');
+        const startTypingBtn = document.getElementById('startTypingBtn');
+        const stopTypingBtn = document.getElementById('stopTypingBtn');
+        const sendNotificationBtn = document.getElementById('sendNotificationBtn');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `[${timestamp}] ${message}`;
+            eventLog.appendChild(logEntry);
+            eventLog.scrollTop = eventLog.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            if (connected) {
+                connectionStatus.textContent = '✅ Connected';
+                connectionStatus.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            } else {
+                connectionStatus.textContent = '❌ Disconnected';
+                connectionStatus.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+            
+            // Enable/disable action buttons
+            const actionButtons = [updateUserBtn, activityBtn, getOnlineBtn, startTypingBtn, stopTypingBtn, sendNotificationBtn];
+            actionButtons.forEach(btn => btn.disabled = !connected);
+        }
+
+        function updateOnlineUsers(users) {
+            onlineCount.textContent = users.length;
+            
+            if (users.length === 0) {
+                onlineUsersList.innerHTML = '<p>No users online</p>';
+                return;
+            }
+
+            onlineUsersList.innerHTML = users.map(user => `
+                <div class="user-item">
+                    <div>
+                        <span class="online-indicator"></span>
+                        <strong>${user.name}</strong> (${user.email})
+                    </div>
+                    <small>${new Date(user.connectedAt).toLocaleTimeString()}</small>
+                </div>
+            `).join('');
+        }
+
+        // Connect button handler
+        connectBtn.addEventListener('click', () => {
+            socket = io();
+
+            socket.on('connect', () => {
+                log('🔌 Connected to server');
+                updateConnectionStatus(true);
+                
+                // Send user join event
+                const userData = {
+                    id: userIdInput.value,
+                    name: userNameInput.value,
+                    email: userEmailInput.value,
+                    picture: userPictureInput.value || null
+                };
+                
+                socket.emit('user-join', userData);
+                log(`👤 Joining as: ${userData.name} (${userData.email})`);
+            });
+
+            socket.on('disconnect', () => {
+                log('🔌 Disconnected from server');
+                updateConnectionStatus(false);
+            });
+
+            socket.on('join-success', (data) => {
+                log(`✅ ${data.message}`, 'success');
+            });
+
+            socket.on('join-error', (data) => {
+                log(`❌ ${data.message}`, 'error');
+            });
+
+            socket.on('user-status-change', (data) => {
+                if (data.type === 'user_online') {
+                    log(`👤 User came online: ${data.user.name}`);
+                } else if (data.type === 'user_offline') {
+                    log(`👤 User went offline: ${data.user.name}`);
+                }
+            });
+
+            socket.on('online-users-list', (data) => {
+                log(`👥 Received online users: ${data.count} users`);
+                updateOnlineUsers(data.users);
+            });
+
+            socket.on('user-typing', (data) => {
+                log(`⌨️ ${data.userName} is typing...`);
+            });
+
+            socket.on('user-stop-typing', (data) => {
+                log(`⌨️ ${data.userName} stopped typing`);
+            });
+
+            socket.on('notification', (data) => {
+                log(`🔔 Notification: ${data.message || JSON.stringify(data)}`);
+            });
+
+            socket.on('user-data-updated', (data) => {
+                log(`📝 User data updated: ${JSON.stringify(data)}`);
+            });
+        });
+
+        // Disconnect button handler
+        disconnectBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+
+        // Action button handlers
+        updateUserBtn.addEventListener('click', () => {
+            const updateData = {
+                id: userIdInput.value,
+                name: userNameInput.value + ' (Updated)',
+                location: 'Vietnam'
+            };
+            socket.emit('user-update', updateData);
+            log(`📝 Sent user update: ${JSON.stringify(updateData)}`);
+        });
+
+        activityBtn.addEventListener('click', () => {
+            socket.emit('user-activity');
+            log('⚡ Sent activity update');
+        });
+
+        getOnlineBtn.addEventListener('click', () => {
+            socket.emit('get-online-users');
+            log('👥 Requested online users list');
+        });
+
+        startTypingBtn.addEventListener('click', () => {
+            socket.emit('typing-start', { location: 'chat' });
+            log('⌨️ Started typing indicator');
+        });
+
+        stopTypingBtn.addEventListener('click', () => {
+            socket.emit('typing-stop', { location: 'chat' });
+            log('⌨️ Stopped typing indicator');
+        });
+
+        sendNotificationBtn.addEventListener('click', () => {
+            const message = document.getElementById('notificationMsg').value;
+            if (message) {
+                socket.emit('send-notification', {
+                    notification: { message, type: 'info' }
+                });
+                log(`🔔 Sent notification: ${message}`);
+                document.getElementById('notificationMsg').value = '';
+            }
+        });
+
+        clearLogBtn.addEventListener('click', () => {
+            eventLog.innerHTML = '<div class="log-entry">Log cleared...</div>';
+        });
+
+        // Initialize
+        updateConnectionStatus(false);
+        log('🚀 Socket.IO Test Page Ready');
+    </script>
+</body>
+</html> 
