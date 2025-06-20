@@ -8,6 +8,7 @@ const onlineUsersRef = db.ref('onlineUsers');
 class SocketService {
   constructor() {
     this.connectedUsers = new Map(); // Track connected users with socket info
+    this.activeRooms = new Map(); // Track active rooms and their members
   }
 
   // Initialize socket service with io instance
@@ -72,6 +73,10 @@ class SocketService {
         count: onlineUsers.length
       });
 
+      // Sync user presence in all rooms they're in
+      const roomSyncService = require('./roomSyncService');
+      await roomSyncService.syncUserPresence(userData.id, true);
+
       console.log(`👤 User connected: ${userData.name} (${userData.email}) - Socket: ${socket.id}`);
       
       return true;
@@ -109,6 +114,10 @@ class SocketService {
           },
           timestamp: new Date().toISOString()
         });
+
+        // Sync user presence in all rooms they're in
+        const roomSyncService = require('./roomSyncService');
+        await roomSyncService.syncUserPresence(socket.userId, false);
 
         console.log(`👤 User disconnected: ${socket.userName} (${socket.userEmail})`);
       }
@@ -182,6 +191,87 @@ class SocketService {
       ...notification,
       timestamp: new Date().toISOString()
     });
+  }
+
+  // Handle user joining a room
+  async handleJoinRoom(socket, roomId) {
+    try {
+      socket.join(roomId);
+      console.log(`🏠 User ${socket.userName} joined room ${roomId}`);
+      
+      // Update room member count in memory
+      if (this.activeRooms && this.activeRooms.has(roomId)) {
+        this.activeRooms.get(roomId).members.add(socket.userId);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error joining room:', error);
+      return false;
+    }
+  }
+
+  // Handle user leaving a room
+  async handleLeaveRoom(socket, roomId) {
+    try {
+      socket.leave(roomId);
+      console.log(`🏠 User ${socket.userName} left room ${roomId}`);
+      
+      // Update room member count in memory
+      if (this.activeRooms && this.activeRooms.has(roomId)) {
+        this.activeRooms.get(roomId).members.delete(socket.userId);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error leaving room:', error);
+      return false;
+    }
+  }
+
+  // Broadcast message to room
+  broadcastToRoom(roomId, event, data) {
+    if (this.io) {
+      this.io.to(roomId).emit(event, data);
+    }
+  }
+
+  // Get room members count
+  getRoomMembersCount(roomId) {
+    try {
+      // Try from our in-memory tracking first
+      if (this.activeRooms && this.activeRooms.has(roomId)) {
+        return this.activeRooms.get(roomId).members.size;
+      }
+
+      // Fallback to Socket.IO adapter
+      if (this.io && this.io.sockets && this.io.sockets.adapter) {
+        const roomSockets = this.io.sockets.adapter.rooms.get(roomId);
+        return roomSockets ? roomSockets.size : 0;
+      }
+
+      return 0;
+    } catch (error) {
+      console.error('Error getting room members count:', error);
+      return 0;
+    }
+  }
+
+  // Initialize room in memory
+  initializeRoom(roomData) {
+    if (this.activeRooms) {
+      this.activeRooms.set(roomData.roomId, {
+        ...roomData,
+        members: new Set()
+      });
+    }
+  }
+
+  // Remove room from memory
+  removeRoom(roomId) {
+    if (this.activeRooms) {
+      this.activeRooms.delete(roomId);
+    }
   }
 }
 
